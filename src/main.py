@@ -7,6 +7,7 @@ Runs an always-on listening loop with:
     * Advanced reaction system
     * Memory management (mood, engagement, presence)
     * Interruption handling (user can interrupt during speech)
+    * System awareness (CPU, RAM, app monitoring)
 
 Press Ctrl+C to exit gracefully.
 """
@@ -21,6 +22,7 @@ from src.tts import speak, speak_interruptible
 from src.reaction_system import play_silence_reaction, play_directed_reaction
 from src.personality import load_personality, get_personality, get_personality_prompt, should_react
 from src.interruption_handler import handle_interruption
+from src.system_monitor import check_system, get_system_context
 from src.memory_manager import (
     load_memory,
     update_memory,
@@ -52,10 +54,14 @@ def main() -> None:
     print(f"  Personality: {personality.get('tone', 'friendly')} · "
           f"Energy: {personality.get('energy_score', 5)}/10")
     print("  Always-on listening · Interruptions enabled")
+    print("  System monitoring active")
     print("  Press Ctrl+C to exit.\n")
 
     try:
         while True:
+            # -- System awareness check -----------------------------------
+            _check_system_alerts(personality)
+
             # -- Presence check -------------------------------------------
             presence = get_presence_prompt()
             if presence:
@@ -116,6 +122,22 @@ def main() -> None:
         print(f"\n\n👋  {personality.get('name', 'Desktop Buddy')} shutting down. Goodbye!")
 
 
+def _check_system_alerts(personality: dict) -> None:
+    """
+    Check for system alerts and speak them if any.
+
+    Self-throttled by check_system() — safe to call every loop iteration.
+    """
+    events = check_system()
+
+    for event in events:
+        msg = event.get("message", "")
+        if msg:
+            print(f"🖥️  System alert: {msg}")
+            speak(msg)
+            add_context_message("system", msg)
+
+
 def _handle_instruction(instruction: dict, state: dict, personality: dict) -> None:
     """Route the instruction to the appropriate action."""
     mode = instruction.get("mode", "LISTEN")
@@ -134,19 +156,16 @@ def _handle_instruction(instruction: dict, state: dict, personality: dict) -> No
     response = generate_response(instruction)
 
     if response:
-        # Use interruptible speech for full responses
         completed = speak_interruptible(response)
         update_context("assistant", response)
         add_context_message("assistant", response)
 
-        # If interrupted, hand off to the interruption handler
         if not completed:
             new_instruction = handle_interruption(
                 state=state,
                 personality_prompt=get_personality_prompt(),
                 mood_summary=get_mood_summary(),
             )
-            # If handler returned a "switch" instruction, process it
             if new_instruction:
                 _handle_instruction(new_instruction, state, personality)
 

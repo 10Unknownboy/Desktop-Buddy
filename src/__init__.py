@@ -9,6 +9,7 @@ This package contains the core modules for the assistant pipeline:
     tts                    → Text-to-Speech (TTS.ai) + interruption support
     reaction_system        → Advanced emotion-aware reactions (no LLM)
     interruption_handler   → Stop/continue/switch on user interrupt
+    system_monitor         → CPU, RAM, app detection, smart alerts
     personality            → Configurable personality system
     memory_manager         → User digital memory + mood + engagement
 """

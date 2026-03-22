@@ -45,6 +45,7 @@ Desktop-Buddy/
     ├── tts.py                  # Text-to-Speech (TTS.ai) + interrupt support
     ├── reaction_system.py      # Advanced emotion-aware reactions (no LLM)
     ├── interruption_handler.py # Stop/continue/switch interrupt logic
+    ├── system_monitor.py       # CPU, RAM, app detection, smart alerts
     ├── micro_reaction.py       # Legacy reactions (kept for reference)
     ├── personality.py          # Personality system
     ├── memory_manager.py       # Memory, mood, engagement, presence
@@ -180,10 +181,26 @@ User speech **always takes priority** over assistant speech.
 
 ---
 
+## 🖥️ System Awareness
+
+Monitors system health in the background (every ~8s, no blocking).
+
+| Alert | Trigger | Cooldown |
+|-------|---------|----------|
+| High CPU | > 80% | 5 min |
+| High RAM | > 80% | 5 min |
+| High temp | > 85°C | 5 min |
+| Heavy process | Single app > 50% CPU | 5 min (per app) |
+
+- Active window tracked via `ctypes` (Windows, zero deps)
+- Friendly app names (`chrome.exe` → "Chrome")
+- Alerts spoken as short natural phrases
+
+---
+
 ## 🛠️ Current Limitations
 
 - ❌ Persistent conversation memory across sessions
-- ❌ System awareness (CPU, active apps)
 - ❌ Background music / ambient
 
 ---
@@ -198,7 +215,7 @@ User speech **always takes priority** over assistant speech.
 - [x] ~~Mood tracking~~
 - [x] ~~Advanced reaction system~~
 - [x] ~~Engagement meter + presence~~
-- [ ] System awareness
+- [x] ~~System awareness~~
 - [x] ~~Interruption handling~~
 - [ ] Background music
 - [ ] Advanced memory persistence
