@@ -1,76 +1,75 @@
 """
-stt.py - Speech-to-Text module.
+stt.py - Speech-to-Text module with retry logic.
 
 Uses the Groq API with the Whisper model to transcribe audio files.
 Returns both the transcribed text and a confidence score.
+
+Failsafes:
+    * Retries up to 2 times on failure
+    * Returns empty result gracefully (never crashes)
 """
+
+import time
 
 from groq import Groq
 
 from src.config import GROQ_API_KEY
+from src.logger import get_logger
+
+log = get_logger("stt")
 
 # ---------------------------------------------------------------------------
-# Groq client (initialised once at module level)
+# Groq client
 # ---------------------------------------------------------------------------
 _client = Groq(api_key=GROQ_API_KEY)
-
-# Model to use for transcription
 MODEL = "whisper-large-v3-turbo"
+
+# Retry settings
+MAX_RETRIES = 2
+RETRY_DELAY = 1.0   # seconds between retries
 
 
 def transcribe(audio_path: str) -> dict:
     """
-    Transcribe an audio file to text using Groq's Whisper API.
-
-    Args:
-        audio_path: Path to a WAV audio file.
+    Transcribe an audio file with retry logic.
 
     Returns:
-        A dict with keys:
-            - ``text``  (str):   The transcribed text, or empty on failure.
-            - ``confidence`` (float): 0.0–1.0 estimate of transcription
-              quality derived from Whisper's avg_logprob.
+        {"text": str, "confidence": float}
+        Returns empty text on total failure.
     """
-    print("📝  Transcribing audio …")
+    log.info("📝  Transcribing audio …")
 
-    try:
-        with open(audio_path, "rb") as audio_file:
-            result = _client.audio.transcriptions.create(
-                model=MODEL,
-                file=audio_file,
-                language="en",
-                response_format="verbose_json",
-            )
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            with open(audio_path, "rb") as audio_file:
+                result = _client.audio.transcriptions.create(
+                    model=MODEL,
+                    file=audio_file,
+                    language="en",
+                    response_format="verbose_json",
+                )
 
-        # Extract text
-        text = getattr(result, "text", "") or ""
-        text = text.strip()
+            text = (getattr(result, "text", "") or "").strip()
+            confidence = _estimate_confidence(result)
 
-        # Extract confidence from avg_logprob of segments
-        # avg_logprob is negative; closer to 0 = higher confidence
-        confidence = _estimate_confidence(result)
+            log.info(f'📝  Transcription: "{text}"  (confidence: {confidence:.2f})')
+            return {"text": text, "confidence": confidence}
 
-        print(f'📝  Transcription: "{text}"  (confidence: {confidence:.2f})')
-        return {"text": text, "confidence": confidence}
+        except Exception as e:
+            log.warning(f"[STT] Attempt {attempt}/{MAX_RETRIES} failed: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
 
-    except Exception as e:
-        print(f"[ERROR] Transcription failed: {e}")
-        return {"text": "", "confidence": 0.0}
+    log.error("[STT] All retries exhausted. Returning empty result.")
+    return {"text": "", "confidence": 0.0}
 
 
 def _estimate_confidence(result) -> float:
-    """
-    Convert Whisper's avg_logprob into a 0.0–1.0 confidence score.
-
-    Whisper log-probs are typically in the range [-1.0, 0.0].
-    We clamp and linearly map:
-        -1.0  →  0.0  (low confidence)
-         0.0  →  1.0  (high confidence)
-    """
+    """Convert Whisper's avg_logprob into 0.0–1.0 confidence."""
     try:
         segments = getattr(result, "segments", None) or []
         if not segments:
-            return 0.5  # neutral fallback when no segments available
+            return 0.5
 
         avg_logprobs = [
             seg.get("avg_logprob", -0.5) if isinstance(seg, dict)
@@ -78,10 +77,7 @@ def _estimate_confidence(result) -> float:
             for seg in segments
         ]
         mean_logprob = sum(avg_logprobs) / len(avg_logprobs)
-
-        # Clamp to [-1.0, 0.0] then map to [0.0, 1.0]
         clamped = max(-1.0, min(0.0, mean_logprob))
         return round(1.0 + clamped, 3)
-
     except Exception:
         return 0.5

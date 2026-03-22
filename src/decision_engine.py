@@ -1,57 +1,64 @@
 """
-decision_engine.py - Decision Model (Brain).
+decision_engine.py - Decision Model (Brain) with failsafes.
 
-Analyses user input and outputs a structured Instruction Object that
-controls every downstream module.  Uses OpenRouter (Qwen 2.5 7B) as
-a lightweight classifier – NOT for generating final responses.
+Analyses user input and outputs a structured Instruction Object.
+Uses OpenRouter (Qwen 2.5 7B) as a lightweight classifier.
 
-Now personality-aware and memory-informed.
+Failsafes:
+    * Retry up to 2 times on API failure
+    * Rate-limit detection → switch to LISTEN mode
+    * Local fallback if LLM unavailable
+    * Token-optimised prompts
 """
 
 import json
+import time
 
 import requests
 
 from src.config import OPENROUTER_API_KEY
+from src.logger import get_logger
+
+log = get_logger("decision")
 
 # ---------------------------------------------------------------------------
-# OpenRouter settings (decision model)
+# Settings
 # ---------------------------------------------------------------------------
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "qwen/qwen-2.5-7b-instruct"
 
-# ---------------------------------------------------------------------------
-# Cost-control constants
-# ---------------------------------------------------------------------------
 ADVICE_QUOTA = 5
 LOW_CONFIDENCE_THRESHOLD = 0.4
 
-# ---------------------------------------------------------------------------
-# Context buffer (last N exchanges)
-# ---------------------------------------------------------------------------
+MAX_RETRIES = 2
+RETRY_DELAY = 1.0
+
 MAX_CONTEXT = 2
 _context_buffer: list[dict] = []
 
+# Rate-limit tracking
+_rate_limited_until: float = 0.0
+
 # ---------------------------------------------------------------------------
-# System prompt – personality + mood injected at call time
+# System prompt (token-optimised)
 # ---------------------------------------------------------------------------
 _BASE_DECISION_PROMPT = """\
-You are a decision-only classifier. Analyse the user message and return STRICT JSON.
+Decision classifier. Return STRICT JSON only.
 
 PERSONALITY: {personality_info}
-USER MOOD: {mood_info}
+MOOD: {mood_info}
 ENGAGEMENT: {engagement_info}
 TIME: {time_info}
 
 RULES:
-- Casual talk / not a question → mode=LISTEN
-- Clear question → mode=SHORT_REPLY (prefer short)
-- Step-by-step help needed → mode=ADVICE
-- Technical troubleshooting → mode=REDIRECT, external_redirect=true
-- Nonsense / noise → mode=IGNORE
-- If advice_count >= quota → never use ADVICE, use SHORT_REPLY or LISTEN
+- Casual/not question → LISTEN
+- Question → SHORT_REPLY
+- Step-by-step help → ADVICE
+- Tech troubleshoot → REDIRECT, external_redirect=true
+- Noise → IGNORE
+- advice_count >= quota → no ADVICE
 
-Return ONLY this JSON (no markdown, no explanation):
+JSON:
 {{
   "mode": "LISTEN|SHORT_REPLY|ADVICE|REDIRECT|IGNORE",
   "emotion": "happy|neutral|frustrated|sad",
@@ -68,7 +75,7 @@ Return ONLY this JSON (no markdown, no explanation):
 }}"""
 
 # ---------------------------------------------------------------------------
-# Default instruction (fallback / merge base)
+# Default instruction
 # ---------------------------------------------------------------------------
 _DEFAULT_INSTRUCTION: dict = {
     "mode": "LISTEN",
@@ -85,6 +92,11 @@ _DEFAULT_INSTRUCTION: dict = {
     "external_redirect": False,
 }
 
+# Local fallback responses (no LLM needed)
+_LOCAL_FALLBACKS: list[str] = [
+    "hmm…", "okay…", "got it…", "I see…", "right…",
+]
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -99,22 +111,11 @@ def decide(
     engagement_context: str = "",
     time_context: str = "",
 ) -> dict:
-    """
-    Analyse user input and return a structured instruction object.
+    """Analyse user input and return a structured instruction object."""
 
-    Args:
-        user_text:          Transcribed text from STT.
-        confidence:         STT confidence score (0.0–1.0).
-        state:              System state dict (advice_count, current_mode).
-        personality_prompt:  Personality fragment for the system prompt.
-        mood_summary:        Mood summary string.
-
-    Returns:
-        Instruction dict with key ``"input"`` containing original text.
-    """
-    # -- Pre-check: Low STT confidence -----------------------------------
+    # -- Pre-check: Low confidence ---------------------------------------
     if confidence < LOW_CONFIDENCE_THRESHOLD:
-        print("🧠  Decision: LOW_CONFIDENCE → asking user to repeat")
+        log.info("🧠  LOW_CONFIDENCE → asking user to repeat")
         return {
             **_DEFAULT_INSTRUCTION,
             "mode": "SHORT_REPLY",
@@ -126,64 +127,45 @@ def decide(
             "_low_confidence": True,
         }
 
+    # -- Pre-check: Rate limited -----------------------------------------
+    if time.time() < _rate_limited_until:
+        log.warning("🧠  Rate limited → LISTEN fallback")
+        return {
+            **_DEFAULT_INSTRUCTION,
+            "mode": "LISTEN",
+            "micro_reaction": "hmm",
+            "input": user_text,
+        }
+
     # -- Build context ---------------------------------------------------
     context_str = ""
     if _context_buffer:
         context_lines = [
             f"- {c['role']}: {c['text']}" for c in _context_buffer[-MAX_CONTEXT:]
         ]
-        context_str = "\nRecent context:\n" + "\n".join(context_lines)
+        context_str = "\nContext:\n" + "\n".join(context_lines)
 
-    # -- Build system prompt with all context ----------------------------
     system_prompt = _BASE_DECISION_PROMPT.format(
-        personality_info=personality_prompt or "default assistant",
+        personality_info=personality_prompt or "default",
         mood_info=mood_summary or "unknown",
         engagement_info=engagement_context or "moderate",
         time_info=time_context or "unknown",
     )
 
-    # -- User message for classifier -------------------------------------
     user_message = (
-        f'User said: "{user_text}"\n'
-        f"STT confidence: {confidence:.2f}\n"
-        f"advice_count: {state.get('advice_count', 0)}/{ADVICE_QUOTA}\n"
-        f"current_mode: {state.get('current_mode', 'none')}"
+        f'User: "{user_text}"\n'
+        f"conf:{confidence:.2f} advice:{state.get('advice_count', 0)}/{ADVICE_QUOTA}"
         f"{context_str}"
     )
 
-    # -- Call decision model ---------------------------------------------
-    print("🧠  Thinking …")
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        "max_tokens": 200,
-        "temperature": 0.1,
-    }
-
-    try:
-        response = requests.post(
-            OPENROUTER_URL, headers=headers, json=payload, timeout=15,
-        )
-        response.raise_for_status()
-        raw = response.json()["choices"][0]["message"]["content"].strip()
-        instruction = _parse_instruction(raw)
-    except Exception as e:
-        print(f"[ERROR] Decision engine failed: {e}")
-        instruction = dict(_DEFAULT_INSTRUCTION)
+    # -- Call with retry -------------------------------------------------
+    log.info("🧠  Thinking …")
+    instruction = _call_with_retry(system_prompt, user_message)
 
     # -- Post-processing -------------------------------------------------
     advice_count = state.get("advice_count", 0)
     if instruction["mode"] == "ADVICE" and advice_count >= ADVICE_QUOTA:
-        print(f"🧠  Advice quota reached ({advice_count}/{ADVICE_QUOTA}) → SHORT_REPLY")
+        log.info(f"🧠  Advice quota ({advice_count}/{ADVICE_QUOTA}) → SHORT_REPLY")
         instruction["mode"] = "SHORT_REPLY"
         instruction["max_length"] = "short"
 
@@ -198,10 +180,8 @@ def decide(
     if len(_context_buffer) > MAX_CONTEXT * 2:
         _context_buffer.pop(0)
 
-    print(f"🧠  Decision: mode={instruction['mode']}  "
-          f"emotion={instruction['emotion']}  "
-          f"intent={instruction['intent']}  "
-          f"respond={instruction['response_needed']}")
+    log.info(f"🧠  Decision: mode={instruction['mode']}  "
+             f"emotion={instruction['emotion']}  respond={instruction['response_needed']}")
 
     return instruction
 
@@ -214,11 +194,54 @@ def update_context(role: str, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal
 # ---------------------------------------------------------------------------
 
+def _call_with_retry(system_prompt: str, user_message: str) -> dict:
+    """Call OpenRouter with retry logic and rate-limit detection."""
+    global _rate_limited_until
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "max_tokens": 180,
+        "temperature": 0.1,
+    }
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.post(
+                OPENROUTER_URL, headers=headers, json=payload, timeout=15,
+            )
+
+            # Rate limit detection
+            if resp.status_code == 429:
+                log.warning("[DECISION] Rate limited — backing off 60s")
+                _rate_limited_until = time.time() + 60
+                return dict(_DEFAULT_INSTRUCTION)
+
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            return _parse_instruction(raw)
+
+        except Exception as e:
+            log.warning(f"[DECISION] Attempt {attempt}/{MAX_RETRIES}: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+
+    log.error("[DECISION] All retries failed → local fallback")
+    return dict(_DEFAULT_INSTRUCTION)
+
+
 def _parse_instruction(raw: str) -> dict:
-    """Parse LLM output into a validated instruction dict."""
+    """Parse LLM JSON output with validation."""
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
@@ -228,7 +251,7 @@ def _parse_instruction(raw: str) -> dict:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        print(f"[WARN] Could not parse decision JSON, using defaults. Raw: {raw[:120]}")
+        log.warning(f"[DECISION] JSON parse failed: {raw[:100]}")
         return dict(_DEFAULT_INSTRUCTION)
 
     result = dict(_DEFAULT_INSTRUCTION)
@@ -236,16 +259,11 @@ def _parse_instruction(raw: str) -> dict:
         if key in parsed:
             result[key] = parsed[key]
 
-    valid_modes = {"LISTEN", "SHORT_REPLY", "ADVICE", "REDIRECT", "IGNORE"}
-    if result["mode"] not in valid_modes:
+    if result["mode"] not in {"LISTEN", "SHORT_REPLY", "ADVICE", "REDIRECT", "IGNORE"}:
         result["mode"] = "LISTEN"
-
-    valid_emotions = {"happy", "neutral", "frustrated", "sad"}
-    if result["emotion"] not in valid_emotions:
+    if result["emotion"] not in {"happy", "neutral", "frustrated", "sad"}:
         result["emotion"] = "neutral"
-
-    valid_lengths = {"short", "medium", "long"}
-    if result["max_length"] not in valid_lengths:
+    if result["max_length"] not in {"short", "medium", "long"}:
         result["max_length"] = "short"
 
     return result

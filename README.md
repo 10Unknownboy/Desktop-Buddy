@@ -11,7 +11,7 @@ A real-time desktop AI assistant built in Python with a **dual-model architectur
 
 ```
           ┌───────────┐     ┌────────────┐     ┌─────────────────┐
-  Mic ──▶ │   STT     │────▶│  Decision  │────▶│  Response Engine │──▶ TTS ──▶ Speaker
+  Mic ──▶│   STT     │────▶│  Decision  │────▶│  Response Engine │──▶ TTS ──▶ Speaker
           │(Groq/     │     │  Engine    │     │  (personality-  │   (TTS.ai)
           │ Whisper)  │     │  (Brain)   │     │   aware)        │
           └───────────┘     └─────┬──────┘     └─────────────────┘
@@ -49,10 +49,11 @@ Desktop-Buddy/
     ├── engagement_manager.py   # Conversation quality scoring
     ├── time_awareness.py       # Time-of-day tone + greetings
     ├── background_mode.py      # Ambient audio when idle
-    ├── micro_reaction.py       # Legacy reactions (kept for reference)
+    ├── logger.py               # Structured file + console logging
+    ├── micro_reaction.py       # Legacy (kept for reference)
     ├── personality.py          # Personality system
-    ├── memory_manager.py       # Memory, mood, engagement, presence
-    └── main.py                 # Main loop + routing
+    ├── memory_manager.py       # Memory, mood, persistence
+    └── main.py                 # Final integrated loop
 ```
 
 ---
@@ -128,7 +129,7 @@ Only relevant memory sections are loaded per response.
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/<your-username>/Desktop-Buddy.git
+git clone https://github.com/10Unknownboy/Desktop-Buddy.git
 cd Desktop-Buddy
 python -m venv venv
 venv\Scripts\activate          # Windows
@@ -239,6 +240,22 @@ Stops instantly when user speaks. Volume: 12% of normal.
 
 ---
 
+## 🛡️ Failsafes & Resilience
+
+| System | Strategy |
+|--------|----------|
+| STT fails | Retry ×2, then ask user to repeat |
+| LLM fails | Retry ×2, then local fallback ("something went wrong…") |
+| LLM rate-limited | 60s backoff → LISTEN mode, no API calls |
+| TTS fails | Retry ×2, skip voice but log text |
+| Any subsystem crash | try/except in main loop — never kills the process |
+| Advice overuse | Daily limit (15), then "let's keep it light" |
+| Shutdown | `save_memory()` + `stop_background_audio()` + log |
+
+Logs: `logs/buddy.log` (DEBUG-level file, INFO-level console)
+
+---
+
 ## 🛠️ Current Limitations
 
 - ❌ Persistent conversation memory across sessions
@@ -259,6 +276,7 @@ Stops instantly when user speaks. Volume: 12% of normal.
 - [x] ~~Interruption handling~~
 - [x] ~~Time awareness~~
 - [x] ~~Background listening mode~~
+- [x] ~~Final integration + failsafes~~
 - [ ] Advanced memory persistence
 
 ---
