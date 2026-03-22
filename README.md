@@ -46,6 +46,9 @@ Desktop-Buddy/
     ├── reaction_system.py      # Advanced emotion-aware reactions (no LLM)
     ├── interruption_handler.py # Stop/continue/switch interrupt logic
     ├── system_monitor.py       # CPU, RAM, app detection, smart alerts
+    ├── engagement_manager.py   # Conversation quality scoring
+    ├── time_awareness.py       # Time-of-day tone + greetings
+    ├── background_mode.py      # Ambient audio when idle
     ├── micro_reaction.py       # Legacy reactions (kept for reference)
     ├── personality.py          # Personality system
     ├── memory_manager.py       # Memory, mood, engagement, presence
@@ -198,10 +201,47 @@ Monitors system health in the background (every ~8s, no blocking).
 
 ---
 
+## 📈 Engagement Meter
+
+Evaluates conversation quality every **7–10 minutes** (randomised):
+
+| Factor | Weight |
+|--------|--------|
+| Interaction frequency | 0–4 pts |
+| Intent diversity | 0–3 pts |
+| Emotional engagement | 0–3 pts |
+
+**Low** (0–3) → calm tone, triggers presence prompts
+**High** (7–10) → energetic tone, playful interactions
+
+---
+
+## ⏰ Time Awareness
+
+| Period | Hours | Tone |
+|--------|-------|------|
+| morning | 5–12 | light, fresh |
+| afternoon | 12–17 | normal |
+| evening | 17–21 | warm, relaxed |
+| night | 21–00 | calm, soft |
+| late_night | 0–5 | gentle, suggest rest |
+
+---
+
+## 🎵 Background Mode
+
+Plays ambient audio from `data/ambient/` when:
+- Idle for ≥20 minutes
+- Engagement ≤3
+- CPU < 60%
+
+Stops instantly when user speaks. Volume: 12% of normal.
+
+---
+
 ## 🛠️ Current Limitations
 
 - ❌ Persistent conversation memory across sessions
-- ❌ Background music / ambient
 
 ---
 
@@ -217,7 +257,8 @@ Monitors system health in the background (every ~8s, no blocking).
 - [x] ~~Engagement meter + presence~~
 - [x] ~~System awareness~~
 - [x] ~~Interruption handling~~
-- [ ] Background music
+- [x] ~~Time awareness~~
+- [x] ~~Background listening mode~~
 - [ ] Advanced memory persistence
 
 ---

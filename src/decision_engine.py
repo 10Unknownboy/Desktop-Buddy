@@ -40,6 +40,8 @@ You are a decision-only classifier. Analyse the user message and return STRICT J
 
 PERSONALITY: {personality_info}
 USER MOOD: {mood_info}
+ENGAGEMENT: {engagement_info}
+TIME: {time_info}
 
 RULES:
 - Casual talk / not a question → mode=LISTEN
@@ -94,6 +96,8 @@ def decide(
     state: dict,
     personality_prompt: str = "",
     mood_summary: str = "",
+    engagement_context: str = "",
+    time_context: str = "",
 ) -> dict:
     """
     Analyse user input and return a structured instruction object.
@@ -130,10 +134,12 @@ def decide(
         ]
         context_str = "\nRecent context:\n" + "\n".join(context_lines)
 
-    # -- Build system prompt with personality + mood ---------------------
+    # -- Build system prompt with all context ----------------------------
     system_prompt = _BASE_DECISION_PROMPT.format(
         personality_info=personality_prompt or "default assistant",
         mood_info=mood_summary or "unknown",
+        engagement_info=engagement_context or "moderate",
+        time_info=time_context or "unknown",
     )
 
     # -- User message for classifier -------------------------------------

@@ -14,14 +14,45 @@
     "recent_apps": []
   },
   "conversation_context": {
-    "last_messages": []
+    "last_messages": [
+      {
+        "role": "user",
+        "text": "Wanna play Valorant?",
+        "ts": 1774196774.1158636
+      },
+      {
+        "role": "system",
+        "text": "System Idle Process is using 1100% CPU",
+        "ts": 1774196797.5614097
+      },
+      {
+        "role": "user",
+        "text": "what is your name",
+        "ts": 1774196854.310339
+      },
+      {
+        "role": "user",
+        "text": "Yes, sir.",
+        "ts": 1774196894.8507903
+      },
+      {
+        "role": "assistant",
+        "text": "Sorry, I didn't catch that… can you repeat?",
+        "ts": 1774196895.6594355
+      },
+      {
+        "role": "user",
+        "text": "to run",
+        "ts": 1774196933.4727905
+      }
+    ]
   },
   "advice_usage": {
     "count": 0
   },
   "engagement": {
     "score": 5,
-    "last_interaction_ts": 0,
-    "interaction_count_window": 0
+    "last_interaction_ts": 1774196929.8019211,
+    "interaction_count_window": 4
   }
 }
