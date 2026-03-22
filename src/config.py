@@ -27,11 +27,17 @@ if not _env_path.exists():
 load_dotenv(_env_path)
 
 # ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+PROJECT_ROOT: Path = _project_root
+DATA_DIR: Path = _project_root / "data"
+
+# ---------------------------------------------------------------------------
 # Required API keys
 # ---------------------------------------------------------------------------
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+TTS_AI_API_KEY: str = os.getenv("TTS_AI_API_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Validate at import time
@@ -42,8 +48,8 @@ if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_api_key_here":
     _missing.append("GROQ_API_KEY")
 if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "your_openrouter_api_key_here":
     _missing.append("OPENROUTER_API_KEY")
-if not GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS == "path/to/your/service-account.json":
-    _missing.append("GOOGLE_APPLICATION_CREDENTIALS")
+if not TTS_AI_API_KEY or TTS_AI_API_KEY == "your_tts_ai_api_key_here":
+    _missing.append("TTS_AI_API_KEY")
 
 if _missing:
     print(
@@ -52,6 +58,3 @@ if _missing:
         "\n        Please fill in your real keys before running.",
     )
     sys.exit(1)
-
-# Set the GCP credentials env var so the google-cloud SDK picks it up
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS

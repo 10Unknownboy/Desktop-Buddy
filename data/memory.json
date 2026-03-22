@@ -1,0 +1,27 @@
+{
+  "user_profile": {
+    "name": "",
+    "preferences": {},
+    "behavior_patterns": {},
+    "interests": {}
+  },
+  "mood_memory": {
+    "recent_mood": "neutral",
+    "mood_score": 0
+  },
+  "activity_log": {
+    "current_activity": "",
+    "recent_apps": []
+  },
+  "conversation_context": {
+    "last_messages": []
+  },
+  "advice_usage": {
+    "count": 0
+  },
+  "engagement": {
+    "score": 5,
+    "last_interaction_ts": 0,
+    "interaction_count_window": 0
+  }
+}

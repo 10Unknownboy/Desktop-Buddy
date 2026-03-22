@@ -1,120 +1,151 @@
 """
 main.py - Entry point for Desktop Buddy.
 
-Runs an always-on listening loop with decision-engine routing:
-    listen → transcribe → decide → route → respond/react → speak
-
-The decision engine controls whether a full LLM response is generated,
-a micro-reaction is played, or the input is silently ignored.
+Runs an always-on listening loop with:
+    * Decision-engine routing
+    * Personality system
+    * Advanced reaction system
+    * Memory management (mood, engagement, presence)
 
 Press Ctrl+C to exit gracefully.
 """
 
 import os
+import time
 
 from src.audio_input import listen_continuous
 from src.stt import transcribe
 from src.decision_engine import decide, update_context
 from src.response_engine import generate_response
 from src.tts import speak
-from src.micro_reaction import play_micro_reaction, play_directed_reaction
-
-
-# ---------------------------------------------------------------------------
-# Session state (persists across turns within a single run)
-# ---------------------------------------------------------------------------
-_state: dict = {
-    "advice_count": 0,
-    "current_mode": None,
-}
+from src.reaction_system import play_silence_reaction, play_directed_reaction
+from src.personality import load_personality, get_personality, get_personality_prompt, should_react
+from src.memory_manager import (
+    load_memory,
+    update_memory,
+    update_mood,
+    record_interaction,
+    get_mood_summary,
+    get_presence_prompt,
+    get_advice_count,
+    increment_advice_count,
+    add_context_message,
+)
 
 
 def main() -> None:
-    """Run the assistant loop with decision-engine routing."""
+    """Run the assistant loop."""
+
+    # -- Startup ----------------------------------------------------------
+    personality = load_personality()
+    memory = load_memory()
+
+    state: dict = {
+        "advice_count": get_advice_count(),
+        "current_mode": None,
+    }
+
     print("=" * 50)
-    print("  🤖  Desktop Buddy – Online")
+    print(f"  🤖  {personality.get('name', 'Desktop Buddy')} – Online")
     print("=" * 50)
+    print(f"  Personality: {personality.get('tone', 'friendly')} · "
+          f"Energy: {personality.get('energy_score', 5)}/10")
     print("  Always-on listening · Decision Engine active")
-    print("  Speak naturally – I'll respond when you pause.")
     print("  Press Ctrl+C to exit.\n")
 
     try:
         while True:
-            # 1. Listen until speech + final silence detected
-            audio_path = listen_continuous(
-                on_micro_reaction=play_micro_reaction,
-            )
+            # -- Presence check (between turns) ---------------------------
+            presence = get_presence_prompt()
+            if presence:
+                print(f'💭  Presence: "{presence}"')
+                speak(presence)
+                add_context_message("assistant", presence)
 
-            # Skip if no usable audio was captured
+            # -- Listen ---------------------------------------------------
+            # Use the advanced reaction system's silence callback
+            on_react = play_silence_reaction if should_react() else None
+            audio_path = listen_continuous(on_micro_reaction=on_react)
+
             if not audio_path:
                 print("⚠️  No audio captured. Listening again …\n")
                 continue
 
-            # 2. Transcribe speech to text (now returns dict)
+            # -- Transcribe -----------------------------------------------
             stt_result = transcribe(audio_path)
             text = stt_result["text"]
             confidence = stt_result["confidence"]
 
-            # Clean up the temporary audio file
             try:
                 os.remove(audio_path)
             except OSError:
                 pass
 
-            # Skip empty transcriptions
             if not text:
                 print("⚠️  No speech detected. Listening again …\n")
                 continue
 
-            # 3. Run through the decision engine
-            instruction = decide(text, confidence, _state)
+            # -- Record interaction for engagement meter ------------------
+            record_interaction()
 
-            # Update session state
-            _state["current_mode"] = instruction["mode"]
+            # -- Decide ---------------------------------------------------
+            instruction = decide(
+                user_text=text,
+                confidence=confidence,
+                state=state,
+                personality_prompt=get_personality_prompt(),
+                mood_summary=get_mood_summary(),
+            )
 
-            # 4. Route based on decision
-            _handle_instruction(instruction)
+            state["current_mode"] = instruction["mode"]
 
-            print()  # visual separator between turns
+            # -- Update mood from detected emotion ------------------------
+            update_mood(instruction.get("emotion", "neutral"))
+
+            # -- Memory write if decision says so -------------------------
+            if instruction.get("memory_write") and instruction.get("memory_field"):
+                field = instruction["memory_field"]
+                update_memory(field, "last_value", text)
+
+            # -- Save user message to context -----------------------------
+            add_context_message("user", text)
+
+            # -- Route ----------------------------------------------------
+            _handle_instruction(instruction, state, personality)
+
+            print()
 
     except KeyboardInterrupt:
-        print("\n\n👋  Desktop Buddy shutting down. Goodbye!")
+        print(f"\n\n👋  {personality.get('name', 'Desktop Buddy')} shutting down. Goodbye!")
 
 
-def _handle_instruction(instruction: dict) -> None:
-    """
-    Route the instruction to the appropriate action.
-
-    Modes:
-        LISTEN   → play directed micro-reaction only
-        IGNORE   → do nothing
-        REDIRECT → speak redirect message (no LLM)
-        SHORT_REPLY / ADVICE → generate + speak full response
-    """
+def _handle_instruction(instruction: dict, state: dict, personality: dict) -> None:
+    """Route the instruction to the appropriate action."""
     mode = instruction.get("mode", "LISTEN")
-    reaction_type = instruction.get("micro_reaction", "none")
 
-    # ── IGNORE ────────────────────────────────────────────────
+    # -- IGNORE -----------------------------------------------------------
     if mode == "IGNORE":
         print("🤫  Ignoring input.")
         return
 
-    # ── LISTEN (no full response, just react) ─────────────────
+    # -- LISTEN (advanced reaction only) ----------------------------------
     if mode == "LISTEN":
-        play_directed_reaction(reaction_type)
+        play_directed_reaction(instruction, personality)
         return
 
-    # ── REDIRECT / SHORT_REPLY / ADVICE → generate response ──
+    # -- REDIRECT / SHORT_REPLY / ADVICE → generate response --------------
     response = generate_response(instruction)
 
     if response:
         speak(response)
         update_context("assistant", response)
+        add_context_message("assistant", response)
 
     # Track advice usage
     if mode == "ADVICE":
-        _state["advice_count"] = _state.get("advice_count", 0) + 1
-        print(f"📊  Advice count: {_state['advice_count']}")
+        increment_advice_count()
+        state["advice_count"] = get_advice_count()
+        print(f"📊  Advice count: {state['advice_count']}")
 
 
 if __name__ == "__main__":

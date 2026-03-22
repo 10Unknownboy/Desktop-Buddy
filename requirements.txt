@@ -12,8 +12,5 @@ scipy>=1.10.0
 # Speech-to-Text (Groq Whisper API)
 groq>=0.4.0
 
-# Response Engine (OpenRouter API)
+# Response / Decision Engine + TTS.ai (OpenRouter + REST)
 requests>=2.31.0
-
-# Text-to-Speech (Google Cloud)
-google-cloud-texttospeech>=2.14.0

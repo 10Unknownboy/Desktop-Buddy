@@ -4,22 +4,21 @@ A real-time desktop AI assistant built in Python with a **dual-model architectur
 
 | Stage | Role | Provider |
 |-------|------|----------|
-| **Decision Model** (Brain) | Classifies input, controls routing | OpenRouter · Qwen 2.5 7B Instruct |
-| **Response Model** (Writer) | Generates natural language replies | OpenRouter · Qwen 2.5 7B Instruct |
+| **Decision Model** (Brain) | Classifies input, controls routing | OpenRouter · Qwen 2.5 7B |
+| **Response Model** (Writer) | Generates natural language replies | OpenRouter · Qwen 2.5 7B |
 
 ### Pipeline
 
 ```
           ┌───────────┐     ┌────────────┐     ┌─────────────────┐
   Mic ──▶ │   STT     │────▶│  Decision  │────▶│  Response Engine │──▶ TTS ──▶ Speaker
-          │(Groq/     │     │  Engine    │     │  (only if       │
-          │ Whisper)  │     │  (Brain)   │     │   needed)       │
+          │(Groq/     │     │  Engine    │     │  (personality-  │   (TTS.ai)
+          │ Whisper)  │     │  (Brain)   │     │   aware)        │
           └───────────┘     └─────┬──────┘     └─────────────────┘
                                   │
-                        ┌─────────▼─────────┐
-                        │  Micro-Reaction   │
-                        │  (if mode=LISTEN) │
-                        └───────────────────┘
+                    ┌─────────────┼──────────────┐
+                    ▼             ▼               ▼
+              Micro-React    Memory Update    Mood Tracking
 ```
 
 ---
@@ -28,20 +27,26 @@ A real-time desktop AI assistant built in Python with a **dual-model architectur
 
 ```
 Desktop-Buddy/
-├── .env.example            # API key template
+├── .env.example             # API key template
 ├── .gitignore
 ├── LICENSE
 ├── README.md
 ├── requirements.txt
+├── data/
+│   ├── personality.json     # Personality config (editable)
+│   └── memory.json          # User digital memory (auto-managed)
 └── src/
-    ├── __init__.py          # Package init
+    ├── __init__.py
     ├── config.py            # Loads & validates .env
     ├── audio_input.py       # Continuous listening + silence detection
-    ├── stt.py               # Speech-to-Text  (Groq Whisper) + confidence
-    ├── decision_engine.py   # Decision model / Brain  (OpenRouter)
-    ├── response_engine.py   # Response model / Writer (OpenRouter)
-    ├── tts.py               # Text-to-Speech  (Google Cloud)
-    ├── micro_reaction.py    # Lightweight filler reactions
+    ├── stt.py               # Speech-to-Text (Groq Whisper) + confidence
+    ├── decision_engine.py   # Brain – classifier + cost control
+    ├── response_engine.py   # Writer – personality-aware responses
+    ├── tts.py               # Text-to-Speech (TTS.ai)
+    ├── reaction_system.py   # Advanced emotion-aware reactions (no LLM)
+    ├── micro_reaction.py    # Legacy reactions (kept for reference)
+    ├── personality.py       # Personality system
+    ├── memory_manager.py    # Memory, mood, engagement, presence
     └── main.py              # Main loop + routing
 ```
 
@@ -49,95 +54,93 @@ Desktop-Buddy/
 
 ## 🧠 Decision Engine
 
-The brain of the system. It classifies every user input and outputs a structured **Instruction Object**:
-
-### Modes
+Classifies input → outputs **Instruction Object** controlling all downstream modules.
 
 | Mode | Behaviour |
 |------|-----------|
-| `LISTEN` | No full response – play micro-reaction only |
+| `LISTEN` | Micro-reaction only, no LLM response |
 | `SHORT_REPLY` | Brief conversational reply |
 | `ADVICE` | Step-by-step help (quota-limited) |
 | `REDIRECT` | Suggest external help, no LLM call |
 | `IGNORE` | Do nothing |
 
+---
+
+## 🎭 Reaction System
+
+Advanced micro-reactions — **zero LLM calls**, pure local logic.
+
+- **Emotion pools:** happy → "haha"/"nice!", sad → "aww...", frustrated → "hmm..."
+- **Intent awareness:** greetings get "hey!", rants get "I see..."
+- **Variation:** last 5 reactions tracked, no immediate repeats
+- **Natural timing:** 0.3–0.8 s random delay before speaking
+- **Personality gating:** energy score + reaction_style filter reactions
+
+---
+
 ### Cost Control
+- Casual talk → `LISTEN` (1 LLM call)
+- Low STT confidence → canned response (0 LLM calls)
+- Advice quota reached → auto-downgrade to `SHORT_REPLY`
 
-- Casual talk → `LISTEN` (no response LLM call)
-- Low STT confidence → canned "can you repeat?" (no LLM calls at all)
-- Advice quota (default: 5/session) → automatically downgrades to `SHORT_REPLY`
+---
 
-### Instruction Object
+## 🎭 Personality System
 
+Edit `data/personality.json`:
 ```json
 {
-  "mode": "SHORT_REPLY",
-  "emotion": "neutral",
-  "intent": "question",
-  "response_needed": true,
-  "max_length": "short",
+  "name": "Buddy",
   "tone": "friendly",
-  "interrupt_action": "continue",
-  "memory_write": false,
-  "memory_field": null,
-  "micro_reaction": "none",
-  "external_redirect": false
+  "style": "short",
+  "energy_level": "dynamic",
+  "reaction_style": "expressive"
 }
 ```
+
+- **Tone:** calm / friendly / playful
+- **Style:** short / expressive / minimal
+- **Energy:** random 1–10 at each startup — affects expressiveness
+- **Reactions:** controlled by energy + reaction_style
+
+---
+
+## 📦 Memory System
+
+Auto-managed `data/memory.json`:
+- **User Profile** — name, preferences, interests
+- **Mood Tracking** — score (−10 to +10), type (happy/sad/neutral)
+- **Engagement Meter** — 0–10, recalculated from interaction frequency
+- **Presence Simulation** — idle prompts when engagement is low
+- **Advice Counter** — persisted across turns
+
+Only relevant memory sections are loaded per response.
 
 ---
 
 ## ⚙️ Setup
 
-### 1. Clone the repo
+### 1. Clone & install
 
 ```bash
 git clone https://github.com/<your-username>/Desktop-Buddy.git
 cd Desktop-Buddy
-```
-
-### 2. Create a virtual environment (recommended)
-
-```bash
 python -m venv venv
-
-# Windows
-venv\Scripts\activate
-
-# macOS / Linux
-source venv/bin/activate
-```
-
-### 3. Install dependencies
-
-```bash
+venv\Scripts\activate          # Windows
 pip install -r requirements.txt
 ```
 
-### 4. Configure API keys
+### 2. Configure API keys
 
 ```bash
-# Copy the template
-cp .env.example .env      # Linux/macOS
-copy .env.example .env     # Windows
+copy .env.example .env         # Windows
 ```
-
-Open `.env` and fill in your keys:
 
 | Variable | Where to get it |
 |----------|----------------|
 | `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
 | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to your GCP service-account JSON (see below) |
-
-#### Google Cloud TTS Setup
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or use an existing one).
-3. Enable the **Cloud Text-to-Speech API**.
-4. Go to **IAM & Admin → Service Accounts** → create a service account.
-5. Download the JSON key file.
-6. Set `GOOGLE_APPLICATION_CREDENTIALS` in `.env` to the **absolute path** of the JSON file.
+| `TTS_AI_API_KEY` | [tts.ai](https://tts.ai) |
 
 ---
 
@@ -147,13 +150,13 @@ Open `.env` and fill in your keys:
 python -m src.main
 ```
 
-The assistant will:
-1. 👂 Listen continuously (always-on mic with silence detection)
-2. 🎭 Play a micro-reaction after ~1 s pause ("hmm…")
-3. 📝 Transcribe after ~3 s silence using Groq (Whisper)
-4. 🧠 Classify input via Decision Engine → Instruction Object
-5. 💬 Generate a response (only if needed) via OpenRouter
-6. 🔊 Speak the response via Google Cloud TTS
+1. 👂 Listens continuously (silence-detection)
+2. 🎭 Micro-reaction at ~1 s pause
+3. 📝 Transcribes after ~3 s silence (Groq/Whisper)
+4. 🧠 Decision Engine classifies → Instruction Object
+5. 💬 Response Engine generates reply (if needed)
+6. 🔊 Speaks via TTS.ai
+7. 📦 Updates mood + memory
 
 Press **Ctrl+C** to exit.
 
@@ -161,24 +164,28 @@ Press **Ctrl+C** to exit.
 
 ## 🛠️ Current Limitations
 
-- ❌ Personality system
-- ❌ Persistent memory / conversation history
-- ❌ Interruption handling (flag exists, not yet wired)
+- ❌ Persistent conversation memory across sessions
+- ❌ System awareness (CPU, active apps)
+- ❌ Interruption handling (flag exists, not wired)
+- ❌ Background music / ambient
 - ❌ Threading / async
-- ❌ Background music / ambient awareness
 
 ---
 
 ## 🗺️ Roadmap
 
 - [x] ~~Foundation skeleton~~
-- [x] ~~Continuous listening with silence detection~~
+- [x] ~~Continuous listening + silence detection~~
 - [x] ~~Decision engine (Brain)~~
-- [ ] Add personality system
-- [ ] Persistent memory storage
-- [ ] Wire interruption handling
-- [ ] Reaction animations
-- [ ] Cost tracking dashboard
+- [x] ~~Personality system~~
+- [x] ~~User digital memory~~
+- [x] ~~Mood tracking~~
+- [x] ~~Advanced reaction system~~
+- [x] ~~Engagement meter + presence~~
+- [ ] System awareness
+- [ ] Interruption handling
+- [ ] Background music
+- [ ] Advanced memory persistence
 
 ---
 

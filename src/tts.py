@@ -1,37 +1,25 @@
 """
 tts.py - Text-to-Speech module.
 
-Uses Google Cloud Text-to-Speech to synthesize speech and plays the
-resulting audio through the default output device.
+Uses the TTS.ai REST API (model: kokoro) to synthesize speech and
+plays the resulting audio through the default output device.
 """
 
-import io
 import tempfile
 
-import numpy as np
+import requests
 import sounddevice as sd
 from scipy.io import wavfile
-from google.cloud import texttospeech
+
+from src.config import TTS_AI_API_KEY
 
 # ---------------------------------------------------------------------------
-# Google Cloud TTS client (initialised once)
-# GOOGLE_APPLICATION_CREDENTIALS is set in config.py at import time.
+# TTS.ai settings
 # ---------------------------------------------------------------------------
-import src.config  # noqa: F401  – ensures env var is set before client init
-
-_client = texttospeech.TextToSpeechClient()
-
-# Voice configuration
-_voice = texttospeech.VoiceSelectionParams(
-    language_code="en-US",
-    ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
-)
-
-# Audio output configuration – LINEAR16 (WAV) for easy playback
-_audio_config = texttospeech.AudioConfig(
-    audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-    sample_rate_hertz=24000,
-)
+TTS_API_URL = "https://api.tts.ai/v1/tts/"
+TTS_MODEL = "kokoro"
+TTS_VOICE = "af_bella"
+TTS_FORMAT = "wav"
 
 
 def speak(text: str) -> None:
@@ -47,18 +35,29 @@ def speak(text: str) -> None:
     print("🔊  Synthesizing speech …")
 
     try:
-        synthesis_input = texttospeech.SynthesisInput(text=text)
+        headers = {
+            "Authorization": f"Bearer {TTS_AI_API_KEY}",
+            "Content-Type": "application/json",
+        }
 
-        response = _client.synthesize_speech(
-            input=synthesis_input,
-            voice=_voice,
-            audio_config=_audio_config,
+        payload = {
+            "model": TTS_MODEL,
+            "text": text,
+            "voice": TTS_VOICE,
+            "format": TTS_FORMAT,
+        }
+
+        response = requests.post(
+            TTS_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30,
         )
+        response.raise_for_status()
 
-        # The response audio_content is a LINEAR16 WAV byte string.
-        # Write to a temp file so scipy can read it back.
+        # Write binary audio to a temp WAV file
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        tmp.write(response.audio_content)
+        tmp.write(response.content)
         tmp.close()
 
         # Read WAV and play through default output device
@@ -68,5 +67,7 @@ def speak(text: str) -> None:
 
         print("🔊  Playback complete.")
 
+    except requests.RequestException as e:
+        print(f"[ERROR] TTS.ai request failed: {e}")
     except Exception as e:
-        print(f"[ERROR] Text-to-Speech failed: {e}")
+        print(f"[ERROR] Text-to-Speech playback failed: {e}")

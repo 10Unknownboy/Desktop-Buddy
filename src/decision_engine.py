@@ -5,14 +5,7 @@ Analyses user input and outputs a structured Instruction Object that
 controls every downstream module.  Uses OpenRouter (Qwen 2.5 7B) as
 a lightweight classifier – NOT for generating final responses.
 
-Key features:
-    * Mode classification  (LISTEN / SHORT_REPLY / ADVICE / REDIRECT / IGNORE)
-    * Emotion + intent detection
-    * Cost-control gating  (advice quota, casual-talk bypass)
-    * Response length + tone control
-    * Memory-write flags
-    * Micro-reaction selection
-    * Interruption awareness
+Now personality-aware and memory-informed.
 """
 
 import json
@@ -30,20 +23,23 @@ MODEL = "qwen/qwen-2.5-7b-instruct"
 # ---------------------------------------------------------------------------
 # Cost-control constants
 # ---------------------------------------------------------------------------
-ADVICE_QUOTA = 5                 # max ADVICE responses per session
-LOW_CONFIDENCE_THRESHOLD = 0.4   # below this → skip LLM, ask to repeat
+ADVICE_QUOTA = 5
+LOW_CONFIDENCE_THRESHOLD = 0.4
 
 # ---------------------------------------------------------------------------
-# Minimal context buffer (last N exchanges)
+# Context buffer (last N exchanges)
 # ---------------------------------------------------------------------------
 MAX_CONTEXT = 2
 _context_buffer: list[dict] = []
 
 # ---------------------------------------------------------------------------
-# System prompt – kept ultra-tight to minimize tokens
+# System prompt – personality + mood injected at call time
 # ---------------------------------------------------------------------------
-DECISION_PROMPT = """\
+_BASE_DECISION_PROMPT = """\
 You are a decision-only classifier. Analyse the user message and return STRICT JSON.
+
+PERSONALITY: {personality_info}
+USER MOOD: {mood_info}
 
 RULES:
 - Casual talk / not a question → mode=LISTEN
@@ -54,7 +50,7 @@ RULES:
 - If advice_count >= quota → never use ADVICE, use SHORT_REPLY or LISTEN
 
 Return ONLY this JSON (no markdown, no explanation):
-{
+{{
   "mode": "LISTEN|SHORT_REPLY|ADVICE|REDIRECT|IGNORE",
   "emotion": "happy|neutral|frustrated|sad",
   "intent": "rant|question|thinking_aloud|greeting|technical_issue|emotional_support",
@@ -67,10 +63,10 @@ Return ONLY this JSON (no markdown, no explanation):
   "memory_field": "preferences|behavior|activity|mood|null",
   "micro_reaction": "hmm|oh|laugh|aww|none",
   "external_redirect": true/false
-}"""
+}}"""
 
 # ---------------------------------------------------------------------------
-# Default instruction (used as fallback / merge base)
+# Default instruction (fallback / merge base)
 # ---------------------------------------------------------------------------
 _DEFAULT_INSTRUCTION: dict = {
     "mode": "LISTEN",
@@ -92,24 +88,27 @@ _DEFAULT_INSTRUCTION: dict = {
 # Public API
 # ---------------------------------------------------------------------------
 
-def decide(user_text: str, confidence: float, state: dict) -> dict:
+def decide(
+    user_text: str,
+    confidence: float,
+    state: dict,
+    personality_prompt: str = "",
+    mood_summary: str = "",
+) -> dict:
     """
     Analyse user input and return a structured instruction object.
 
     Args:
-        user_text:   Transcribed text from STT.
-        confidence:  STT confidence score (0.0–1.0).
-        state:       System state dict with keys:
-                     - ``advice_count`` (int)
-                     - ``current_mode`` (str | None)
+        user_text:          Transcribed text from STT.
+        confidence:         STT confidence score (0.0–1.0).
+        state:              System state dict (advice_count, current_mode).
+        personality_prompt:  Personality fragment for the system prompt.
+        mood_summary:        Mood summary string.
 
     Returns:
-        Instruction dict matching the schema above.
-        Always includes key ``"input"`` with the original user text.
+        Instruction dict with key ``"input"`` containing original text.
     """
-    # ------------------------------------------------------------------
-    # Pre-check 1: Low STT confidence → ask to repeat (no LLM cost)
-    # ------------------------------------------------------------------
+    # -- Pre-check: Low STT confidence -----------------------------------
     if confidence < LOW_CONFIDENCE_THRESHOLD:
         print("🧠  Decision: LOW_CONFIDENCE → asking user to repeat")
         return {
@@ -123,9 +122,7 @@ def decide(user_text: str, confidence: float, state: dict) -> dict:
             "_low_confidence": True,
         }
 
-    # ------------------------------------------------------------------
-    # Pre-check 2: Build context string
-    # ------------------------------------------------------------------
+    # -- Build context ---------------------------------------------------
     context_str = ""
     if _context_buffer:
         context_lines = [
@@ -133,20 +130,22 @@ def decide(user_text: str, confidence: float, state: dict) -> dict:
         ]
         context_str = "\nRecent context:\n" + "\n".join(context_lines)
 
-    # ------------------------------------------------------------------
-    # Build the user message for the classifier
-    # ------------------------------------------------------------------
+    # -- Build system prompt with personality + mood ---------------------
+    system_prompt = _BASE_DECISION_PROMPT.format(
+        personality_info=personality_prompt or "default assistant",
+        mood_info=mood_summary or "unknown",
+    )
+
+    # -- User message for classifier -------------------------------------
     user_message = (
-        f"User said: \"{user_text}\"\n"
+        f'User said: "{user_text}"\n'
         f"STT confidence: {confidence:.2f}\n"
         f"advice_count: {state.get('advice_count', 0)}/{ADVICE_QUOTA}\n"
         f"current_mode: {state.get('current_mode', 'none')}"
         f"{context_str}"
     )
 
-    # ------------------------------------------------------------------
-    # Call the decision model
-    # ------------------------------------------------------------------
+    # -- Call decision model ---------------------------------------------
     print("🧠  Thinking …")
 
     headers = {
@@ -157,50 +156,38 @@ def decide(user_text: str, confidence: float, state: dict) -> dict:
     payload = {
         "model": MODEL,
         "messages": [
-            {"role": "system", "content": DECISION_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
         "max_tokens": 200,
-        "temperature": 0.1,  # low temp for deterministic classification
+        "temperature": 0.1,
     }
 
     try:
         response = requests.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json=payload,
-            timeout=15,
+            OPENROUTER_URL, headers=headers, json=payload, timeout=15,
         )
         response.raise_for_status()
-
         raw = response.json()["choices"][0]["message"]["content"].strip()
         instruction = _parse_instruction(raw)
-
     except Exception as e:
         print(f"[ERROR] Decision engine failed: {e}")
         instruction = dict(_DEFAULT_INSTRUCTION)
 
-    # ------------------------------------------------------------------
-    # Post-processing: enforce cost-control rules
-    # ------------------------------------------------------------------
+    # -- Post-processing -------------------------------------------------
     advice_count = state.get("advice_count", 0)
-
-    # Enforce advice quota
     if instruction["mode"] == "ADVICE" and advice_count >= ADVICE_QUOTA:
         print(f"🧠  Advice quota reached ({advice_count}/{ADVICE_QUOTA}) → SHORT_REPLY")
         instruction["mode"] = "SHORT_REPLY"
         instruction["max_length"] = "short"
 
-    # Set response_needed based on mode
     if instruction["mode"] in ("LISTEN", "IGNORE"):
         instruction["response_needed"] = False
     else:
         instruction["response_needed"] = True
 
-    # Attach original text
     instruction["input"] = user_text
 
-    # Update context buffer
     _context_buffer.append({"role": "user", "text": user_text})
     if len(_context_buffer) > MAX_CONTEXT * 2:
         _context_buffer.pop(0)
@@ -214,7 +201,7 @@ def decide(user_text: str, confidence: float, state: dict) -> dict:
 
 
 def update_context(role: str, text: str) -> None:
-    """Append an entry to the context buffer (called from main.py)."""
+    """Append an entry to the context buffer."""
     _context_buffer.append({"role": role, "text": text})
     if len(_context_buffer) > MAX_CONTEXT * 2:
         _context_buffer.pop(0)
@@ -225,17 +212,10 @@ def update_context(role: str, text: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _parse_instruction(raw: str) -> dict:
-    """
-    Parse the LLM's raw text output into a validated instruction dict.
-
-    Tries to extract JSON even if the model wraps it in markdown fences.
-    Falls back to defaults for any missing or invalid fields.
-    """
-    # Strip markdown code fences if present
+    """Parse LLM output into a validated instruction dict."""
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
-        # Remove first and last lines (fences)
         lines = [l for l in lines if not l.strip().startswith("```")]
         cleaned = "\n".join(lines)
 
@@ -245,13 +225,11 @@ def _parse_instruction(raw: str) -> dict:
         print(f"[WARN] Could not parse decision JSON, using defaults. Raw: {raw[:120]}")
         return dict(_DEFAULT_INSTRUCTION)
 
-    # Merge with defaults so every key is guaranteed
     result = dict(_DEFAULT_INSTRUCTION)
     for key in _DEFAULT_INSTRUCTION:
         if key in parsed:
             result[key] = parsed[key]
 
-    # Validate enum values
     valid_modes = {"LISTEN", "SHORT_REPLY", "ADVICE", "REDIRECT", "IGNORE"}
     if result["mode"] not in valid_modes:
         result["mode"] = "LISTEN"
