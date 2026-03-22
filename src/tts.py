@@ -1,12 +1,19 @@
 """
-tts.py - Text-to-Speech with interruption support and failsafes.
+tts.py - Text-to-Speech with async polling and interruption support.
 
-Uses the TTS.ai REST API.  Supports interruptible playback.
+Uses the TTS.ai REST API (Asynchronous Job System).
+Correctly handles queued jobs, polls for completion, and downloads audio.
+
+Flow:
+    1. request_tts(text)  → returns job_id/uuid
+    2. poll_tts(job_id)     → returns result_url
+    3. download_audio(url) → returns audio binary
+    4. play_audio(data)    → handles playback (internal or external)
 
 Failsafes:
-    * Retry up to 2 times on API failure
-    * On total failure: log text to console (skip voice)
-    * Never crashes the main loop
+    * 10s timeout for polling
+    * Retry logic for requests
+    * Skips voice on failure (never crashes main loop)
 """
 
 import base64
@@ -32,9 +39,9 @@ TTS_MODEL = "kokoro"
 TTS_VOICE = "af_bella"
 TTS_FORMAT = "wav"
 
-# Retry
-MAX_RETRIES = 2
-RETRY_DELAY = 0.5
+# Polling Settings
+POLL_INTERVAL = 1.5   # seconds
+MAX_POLL_TIME = 10.0   # seconds
 
 # Interruption detection
 INTERRUPT_CHECK_INTERVAL = 0.05
@@ -53,82 +60,155 @@ _current_text: str = ""
 
 
 # ---------------------------------------------------------------------------
-# Synthesis with retry
+# Core TTS Flow Functions
 # ---------------------------------------------------------------------------
 
-def _synthesize(text: str) -> tuple[np.ndarray, int] | None:
-    """Call TTS.ai with retry. Returns (audio, sample_rate) or None."""
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            headers = {
-                "Authorization": f"Bearer {TTS_AI_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            # Payload updated to include audioEncoding as requested
-            payload = {
-                "model": TTS_MODEL,
-                "text": text,
-                "voice": TTS_VOICE,
-                "format": TTS_FORMAT,
-                "audioConfig": {
-                    "audioEncoding": "LINEAR16"
-                }
-            }
+def request_tts(text: str) -> str | dict | None:
+    """
+    Step 1: Send TTS request to create a job.
+    Returns: job_id/uuid (str) or full JSON response (dict) if already completed.
+    """
+    try:
+        headers = {
+            "Authorization": f"Bearer {TTS_AI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": TTS_MODEL,
+            "text": text,
+            "voice": TTS_VOICE,
+            "format": TTS_FORMAT,
+            "audioConfig": {"audioEncoding": "LINEAR16"}
+        }
+        
+        resp = requests.post(TTS_API_URL, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        # If already completed (cached), return the whole dict
+        if data.get("status") == "completed":
+            log.info(f"[TTS] Job cached and completed immediately: {data.get('uuid')}")
+            return data
             
-            resp = requests.post(
-                TTS_API_URL, headers=headers, json=payload, timeout=30,
-            )
+        uuid = data.get("uuid") or data.get("job_id")
+        log.info(f"[TTS] Job created: {uuid} (status: {data.get('status')})")
+        return uuid
+
+    except Exception as e:
+        log.error(f"[TTS] Request failed: {e}")
+        return None
+
+
+def poll_tts(job_uuid: str) -> str | None:
+    """
+    Step 2: Poll for job completion.
+    Returns: result_url (str) if completed, or None on timeout/failure.
+    """
+    start_time = time.time()
+    headers = {"Authorization": f"Bearer {TTS_AI_API_KEY}"}
+    
+    # Polling URL is typically the base URL + UUID for status
+    poll_url = f"{TTS_API_URL}{job_uuid}"
+
+    log.info(f"[TTS] Polling status for job: {job_uuid} …")
+
+    while time.time() - start_time < MAX_POLL_TIME:
+        try:
+            resp = requests.get(poll_url, headers=headers, timeout=10)
             resp.raise_for_status()
+            data = resp.json()
+            
+            status = data.get("status", "unknown")
+            log.info(f"[TTS] Status: {status}")
 
-            # Debug: print first few bytes
-            header_peek = resp.content[:10]
-            log.info(f"[TTS] Response header peek: {header_peek}")
-
-            audio_content = resp.content
-
-            # Handle JSON response (extract audioContent or url)
-            if audio_content.startswith(b'{'):
-                log.info("[TTS] Detected JSON response, parsing...")
-                data = resp.json()
-                
-                # Check for common audio fields
-                if "audioContent" in data:
-                    log.info("[TTS] Extracting base64 'audioContent'...")
-                    audio_content = base64.b64decode(data["audioContent"])
-                elif "audio_url" in data:
-                    log.info(f"[TTS] Fetching from audio_url: {data['audio_url']}")
-                    audio_content = requests.get(data["audio_url"]).content
-                elif "url" in data:
-                    log.info(f"[TTS] Fetching from url: {data['url']}")
-                    audio_content = requests.get(data["url"]).content
-                else:
-                    log.error(f"[TTS] JSON response missing audio data: {data}")
-                    continue
-
-            # Validate RIFF header
-            if not audio_content.startswith(b'RIFF'):
-                log.error(f"[TTS] Invalid audio format. Expected RIFF, got: {audio_content[:10]}")
-                continue
-
-            # Save to temporary file for wavfile reading
-            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            tmp.write(audio_content)
-            tmp.close()
-
-            sr, data = wavfile.read(tmp.name)
-            return data, sr
-
+            if status == "completed":
+                url = data.get("result_url") or data.get("url")
+                if url:
+                    log.info(f"[TTS] Result URL found: {url}")
+                    return url
+                log.error(f"[TTS] Job completed but URL missing: {data}")
+                return None
+            
+            # Use small sleep between polls
+            time.sleep(POLL_INTERVAL)
+            
         except Exception as e:
-            log.warning(f"[TTS] Attempt {attempt}/{MAX_RETRIES}: {e}")
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY)
+            log.warning(f"[TTS] Polling error: {e}")
+            time.sleep(POLL_INTERVAL)
 
-    log.error(f'[TTS] All retries failed. Text was: "{text}"')
+    log.error("[TTS] Polling timed out — skipping audio.")
     return None
 
 
+def download_audio(url: str) -> bytes | None:
+    """
+    Step 3: Download the actual audio file.
+    Returns: Audio data bytes or None.
+    """
+    try:
+        log.info(f"[TTS] Downloading audio from: {url}")
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        
+        content = resp.content
+        header_peek = content[:10]
+        log.info(f"[TTS] Audio header peek: {header_peek}")
+
+        if not content.startswith(b'RIFF'):
+            log.error(f"[TTS] Downloaded file is not WAV. Header: {header_peek}")
+            return None
+            
+        return content
+
+    except Exception as e:
+        log.error(f"[TTS] Download failed: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
-# Blocking speak (for reactions / short phrases)
+# Integrated Synthesis
+# ---------------------------------------------------------------------------
+
+def _synthesize(text: str) -> tuple[np.ndarray, int] | None:
+    """Full async synthesis flow: Request -> Poll -> Download -> Load."""
+    
+    # Step 1: Request
+    result = request_tts(text)
+    if not result:
+        return None
+
+    # Step 2: Extract URL (handle immediate completion or polling)
+    result_url = None
+    if isinstance(result, dict):
+        # Already completed
+        result_url = result.get("result_url") or result.get("url")
+    else:
+        # Need to poll
+        result_url = poll_tts(result)
+
+    if not result_url:
+        return None
+
+    # Step 3: Download
+    audio_bytes = download_audio(result_url)
+    if not audio_bytes:
+        return None
+
+    # Step 4: Load for playback
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.write(audio_bytes)
+        tmp.close()
+
+        sr, data = wavfile.read(tmp.name)
+        return data, sr
+    except Exception as e:
+        log.error(f"[TTS] Error loading audio data: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Playback API
 # ---------------------------------------------------------------------------
 
 def speak(text: str) -> None:
@@ -155,10 +235,6 @@ def speak(text: str) -> None:
         is_speaking = False
 
 
-# ---------------------------------------------------------------------------
-# Interruptible speak
-# ---------------------------------------------------------------------------
-
 def speak_interruptible(text: str) -> bool:
     """
     Speak with interrupt detection. Returns True if completed, False if interrupted.
@@ -172,7 +248,7 @@ def speak_interruptible(text: str) -> bool:
     result = _synthesize(text)
     if result is None:
         log.warning(f'🔊  TTS failed — text: "{text}"')
-        return True  # treat as "completed" so main loop continues
+        return True
 
     data, sr = result
     _audio_data = data
@@ -214,10 +290,6 @@ def speak_interruptible(text: str) -> bool:
         is_speaking = False
         return True
 
-
-# ---------------------------------------------------------------------------
-# Stop & Resume
-# ---------------------------------------------------------------------------
 
 def stop_speaking() -> None:
     """Immediately stop any current playback."""
