@@ -6,20 +6,21 @@ Runs an always-on listening loop with:
     * Personality system
     * Advanced reaction system
     * Memory management (mood, engagement, presence)
+    * Interruption handling (user can interrupt during speech)
 
 Press Ctrl+C to exit gracefully.
 """
 
 import os
-import time
 
 from src.audio_input import listen_continuous
 from src.stt import transcribe
 from src.decision_engine import decide, update_context
 from src.response_engine import generate_response
-from src.tts import speak
+from src.tts import speak, speak_interruptible
 from src.reaction_system import play_silence_reaction, play_directed_reaction
 from src.personality import load_personality, get_personality, get_personality_prompt, should_react
+from src.interruption_handler import handle_interruption
 from src.memory_manager import (
     load_memory,
     update_memory,
@@ -50,12 +51,12 @@ def main() -> None:
     print("=" * 50)
     print(f"  Personality: {personality.get('tone', 'friendly')} · "
           f"Energy: {personality.get('energy_score', 5)}/10")
-    print("  Always-on listening · Decision Engine active")
+    print("  Always-on listening · Interruptions enabled")
     print("  Press Ctrl+C to exit.\n")
 
     try:
         while True:
-            # -- Presence check (between turns) ---------------------------
+            # -- Presence check -------------------------------------------
             presence = get_presence_prompt()
             if presence:
                 print(f'💭  Presence: "{presence}"')
@@ -63,7 +64,6 @@ def main() -> None:
                 add_context_message("assistant", presence)
 
             # -- Listen ---------------------------------------------------
-            # Use the advanced reaction system's silence callback
             on_react = play_silence_reaction if should_react() else None
             audio_path = listen_continuous(on_micro_reaction=on_react)
 
@@ -85,7 +85,7 @@ def main() -> None:
                 print("⚠️  No speech detected. Listening again …\n")
                 continue
 
-            # -- Record interaction for engagement meter ------------------
+            # -- Record interaction ---------------------------------------
             record_interaction()
 
             # -- Decide ---------------------------------------------------
@@ -99,15 +99,12 @@ def main() -> None:
 
             state["current_mode"] = instruction["mode"]
 
-            # -- Update mood from detected emotion ------------------------
+            # -- Side effects: mood, memory, context ----------------------
             update_mood(instruction.get("emotion", "neutral"))
 
-            # -- Memory write if decision says so -------------------------
             if instruction.get("memory_write") and instruction.get("memory_field"):
-                field = instruction["memory_field"]
-                update_memory(field, "last_value", text)
+                update_memory(instruction["memory_field"], "last_value", text)
 
-            # -- Save user message to context -----------------------------
             add_context_message("user", text)
 
             # -- Route ----------------------------------------------------
@@ -128,7 +125,7 @@ def _handle_instruction(instruction: dict, state: dict, personality: dict) -> No
         print("🤫  Ignoring input.")
         return
 
-    # -- LISTEN (advanced reaction only) ----------------------------------
+    # -- LISTEN (reaction only) -------------------------------------------
     if mode == "LISTEN":
         play_directed_reaction(instruction, personality)
         return
@@ -137,9 +134,21 @@ def _handle_instruction(instruction: dict, state: dict, personality: dict) -> No
     response = generate_response(instruction)
 
     if response:
-        speak(response)
+        # Use interruptible speech for full responses
+        completed = speak_interruptible(response)
         update_context("assistant", response)
         add_context_message("assistant", response)
+
+        # If interrupted, hand off to the interruption handler
+        if not completed:
+            new_instruction = handle_interruption(
+                state=state,
+                personality_prompt=get_personality_prompt(),
+                mood_summary=get_mood_summary(),
+            )
+            # If handler returned a "switch" instruction, process it
+            if new_instruction:
+                _handle_instruction(new_instruction, state, personality)
 
     # Track advice usage
     if mode == "ADVICE":

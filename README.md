@@ -42,12 +42,13 @@ Desktop-Buddy/
     ├── stt.py               # Speech-to-Text (Groq Whisper) + confidence
     ├── decision_engine.py   # Brain – classifier + cost control
     ├── response_engine.py   # Writer – personality-aware responses
-    ├── tts.py               # Text-to-Speech (TTS.ai)
-    ├── reaction_system.py   # Advanced emotion-aware reactions (no LLM)
-    ├── micro_reaction.py    # Legacy reactions (kept for reference)
-    ├── personality.py       # Personality system
-    ├── memory_manager.py    # Memory, mood, engagement, presence
-    └── main.py              # Main loop + routing
+    ├── tts.py                  # Text-to-Speech (TTS.ai) + interrupt support
+    ├── reaction_system.py      # Advanced emotion-aware reactions (no LLM)
+    ├── interruption_handler.py # Stop/continue/switch interrupt logic
+    ├── micro_reaction.py       # Legacy reactions (kept for reference)
+    ├── personality.py          # Personality system
+    ├── memory_manager.py       # Memory, mood, engagement, presence
+    └── main.py                 # Main loop + routing
 ```
 
 ---
@@ -155,10 +156,27 @@ python -m src.main
 3. 📝 Transcribes after ~3 s silence (Groq/Whisper)
 4. 🧠 Decision Engine classifies → Instruction Object
 5. 💬 Response Engine generates reply (if needed)
-6. 🔊 Speaks via TTS.ai
-7. 📦 Updates mood + memory
+6. 🔊 Speaks via TTS.ai (interruptible)
+7. ⚡ If interrupted → capture new speech → decide stop/continue/switch
+8. 📦 Updates mood + memory
 
 Press **Ctrl+C** to exit.
+
+---
+
+## ⚡ Interruption System
+
+User speech **always takes priority** over assistant speech.
+
+| Action | Behaviour |
+|--------|----------|
+| `stop` | Discard previous response |
+| `continue` | Resume from where it stopped |
+| `switch` | Drop previous, start new response |
+
+- Mic is polled every 50 ms during TTS playback
+- `sd.stop()` halts audio instantly on detection
+- Resume tracks exact sample position
 
 ---
 
@@ -166,9 +184,7 @@ Press **Ctrl+C** to exit.
 
 - ❌ Persistent conversation memory across sessions
 - ❌ System awareness (CPU, active apps)
-- ❌ Interruption handling (flag exists, not wired)
 - ❌ Background music / ambient
-- ❌ Threading / async
 
 ---
 
@@ -183,7 +199,7 @@ Press **Ctrl+C** to exit.
 - [x] ~~Advanced reaction system~~
 - [x] ~~Engagement meter + presence~~
 - [ ] System awareness
-- [ ] Interruption handling
+- [x] ~~Interruption handling~~
 - [ ] Background music
 - [ ] Advanced memory persistence
 
