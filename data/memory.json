@@ -17,33 +17,33 @@
     "last_messages": [
       {
         "role": "user",
-        "text": "Wanna play Valorant?",
-        "ts": 1774196774.1158636
-      },
-      {
-        "role": "system",
-        "text": "System Idle Process is using 1100% CPU",
-        "ts": 1774196797.5614097
-      },
-      {
-        "role": "user",
-        "text": "what is your name",
-        "ts": 1774196854.310339
-      },
-      {
-        "role": "user",
-        "text": "Yes, sir.",
-        "ts": 1774196894.8507903
+        "text": "Hey.",
+        "ts": 1774197981.4140224
       },
       {
         "role": "assistant",
         "text": "Sorry, I didn't catch that… can you repeat?",
-        "ts": 1774196895.6594355
+        "ts": 1774197983.8174014
+      },
+      {
+        "role": "system",
+        "text": "System Idle Process is using 1124% CPU",
+        "ts": 1774197987.2279413
       },
       {
         "role": "user",
-        "text": "to run",
-        "ts": 1774196933.4727905
+        "text": "What is your name?",
+        "ts": 1774198365.427979
+      },
+      {
+        "role": "assistant",
+        "text": "My name is Buddy. Nice to meet you!",
+        "ts": 1774198369.3762112
+      },
+      {
+        "role": "system",
+        "text": "System Idle Process is using 1138% CPU",
+        "ts": 1774198372.747704
       }
     ]
   },

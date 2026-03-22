@@ -9,6 +9,8 @@ Failsafes:
     * Never crashes the main loop
 """
 
+import base64
+import json
 import tempfile
 import time
 
@@ -62,19 +64,55 @@ def _synthesize(text: str) -> tuple[np.ndarray, int] | None:
                 "Authorization": f"Bearer {TTS_AI_API_KEY}",
                 "Content-Type": "application/json",
             }
+            # Payload updated to include audioEncoding as requested
             payload = {
                 "model": TTS_MODEL,
                 "text": text,
                 "voice": TTS_VOICE,
                 "format": TTS_FORMAT,
+                "audioConfig": {
+                    "audioEncoding": "LINEAR16"
+                }
             }
+            
             resp = requests.post(
                 TTS_API_URL, headers=headers, json=payload, timeout=30,
             )
             resp.raise_for_status()
 
+            # Debug: print first few bytes
+            header_peek = resp.content[:10]
+            log.info(f"[TTS] Response header peek: {header_peek}")
+
+            audio_content = resp.content
+
+            # Handle JSON response (extract audioContent or url)
+            if audio_content.startswith(b'{'):
+                log.info("[TTS] Detected JSON response, parsing...")
+                data = resp.json()
+                
+                # Check for common audio fields
+                if "audioContent" in data:
+                    log.info("[TTS] Extracting base64 'audioContent'...")
+                    audio_content = base64.b64decode(data["audioContent"])
+                elif "audio_url" in data:
+                    log.info(f"[TTS] Fetching from audio_url: {data['audio_url']}")
+                    audio_content = requests.get(data["audio_url"]).content
+                elif "url" in data:
+                    log.info(f"[TTS] Fetching from url: {data['url']}")
+                    audio_content = requests.get(data["url"]).content
+                else:
+                    log.error(f"[TTS] JSON response missing audio data: {data}")
+                    continue
+
+            # Validate RIFF header
+            if not audio_content.startswith(b'RIFF'):
+                log.error(f"[TTS] Invalid audio format. Expected RIFF, got: {audio_content[:10]}")
+                continue
+
+            # Save to temporary file for wavfile reading
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            tmp.write(resp.content)
+            tmp.write(audio_content)
             tmp.close()
 
             sr, data = wavfile.read(tmp.name)
