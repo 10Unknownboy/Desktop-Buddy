@@ -4,14 +4,22 @@ A real-time desktop AI assistant built in Python with a **dual-model architectur
 
 | Stage | Role | Provider |
 |-------|------|----------|
-| **Decision Model** (Brain) | Decides what to do with user input | *Placeholder – coming soon* |
+| **Decision Model** (Brain) | Classifies input, controls routing | OpenRouter · Qwen 2.5 7B Instruct |
 | **Response Model** (Writer) | Generates natural language replies | OpenRouter · Qwen 2.5 7B Instruct |
 
 ### Pipeline
 
 ```
-Microphone → Speech-to-Text → Decision Engine → Response Engine → Text-to-Speech → Speaker
-                (Groq/Whisper)    (placeholder)    (OpenRouter)     (Google Cloud)
+          ┌───────────┐     ┌────────────┐     ┌─────────────────┐
+  Mic ──▶ │   STT     │────▶│  Decision  │────▶│  Response Engine │──▶ TTS ──▶ Speaker
+          │(Groq/     │     │  Engine    │     │  (only if       │
+          │ Whisper)  │     │  (Brain)   │     │   needed)       │
+          └───────────┘     └─────┬──────┘     └─────────────────┘
+                                  │
+                        ┌─────────▼─────────┐
+                        │  Micro-Reaction   │
+                        │  (if mode=LISTEN) │
+                        └───────────────────┘
 ```
 
 ---
@@ -20,20 +28,61 @@ Microphone → Speech-to-Text → Decision Engine → Response Engine → Text-t
 
 ```
 Desktop-Buddy/
-├── .env.example          # API key template
+├── .env.example            # API key template
 ├── .gitignore
 ├── LICENSE
 ├── README.md
 ├── requirements.txt
 └── src/
-    ├── __init__.py       # Package init
-    ├── config.py         # Loads & validates .env
-    ├── audio_input.py    # Microphone recording
-    ├── stt.py            # Speech-to-Text  (Groq Whisper)
-    ├── decision_engine.py# Decision model   (placeholder)
-    ├── response_engine.py# Response model   (OpenRouter)
-    ├── tts.py            # Text-to-Speech   (Google Cloud)
-    └── main.py           # Main loop
+    ├── __init__.py          # Package init
+    ├── config.py            # Loads & validates .env
+    ├── audio_input.py       # Continuous listening + silence detection
+    ├── stt.py               # Speech-to-Text  (Groq Whisper) + confidence
+    ├── decision_engine.py   # Decision model / Brain  (OpenRouter)
+    ├── response_engine.py   # Response model / Writer (OpenRouter)
+    ├── tts.py               # Text-to-Speech  (Google Cloud)
+    ├── micro_reaction.py    # Lightweight filler reactions
+    └── main.py              # Main loop + routing
+```
+
+---
+
+## 🧠 Decision Engine
+
+The brain of the system. It classifies every user input and outputs a structured **Instruction Object**:
+
+### Modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `LISTEN` | No full response – play micro-reaction only |
+| `SHORT_REPLY` | Brief conversational reply |
+| `ADVICE` | Step-by-step help (quota-limited) |
+| `REDIRECT` | Suggest external help, no LLM call |
+| `IGNORE` | Do nothing |
+
+### Cost Control
+
+- Casual talk → `LISTEN` (no response LLM call)
+- Low STT confidence → canned "can you repeat?" (no LLM calls at all)
+- Advice quota (default: 5/session) → automatically downgrades to `SHORT_REPLY`
+
+### Instruction Object
+
+```json
+{
+  "mode": "SHORT_REPLY",
+  "emotion": "neutral",
+  "intent": "question",
+  "response_needed": true,
+  "max_length": "short",
+  "tone": "friendly",
+  "interrupt_action": "continue",
+  "memory_write": false,
+  "memory_field": null,
+  "micro_reaction": "none",
+  "external_redirect": false
+}
 ```
 
 ---
@@ -99,11 +148,12 @@ python -m src.main
 ```
 
 The assistant will:
-1. 🎙️ Record 5 seconds of audio from your microphone
-2. 📝 Transcribe it using Groq (Whisper)
-3. 🧠 Pass it through the decision engine (placeholder)
-4. 💬 Generate a response via OpenRouter (Qwen 2.5)
-5. 🔊 Speak the response via Google Cloud TTS
+1. 👂 Listen continuously (always-on mic with silence detection)
+2. 🎭 Play a micro-reaction after ~1 s pause ("hmm…")
+3. 📝 Transcribe after ~3 s silence using Groq (Whisper)
+4. 🧠 Classify input via Decision Engine → Instruction Object
+5. 💬 Generate a response (only if needed) via OpenRouter
+6. 🔊 Speak the response via Google Cloud TTS
 
 Press **Ctrl+C** to exit.
 
@@ -111,27 +161,24 @@ Press **Ctrl+C** to exit.
 
 ## 🛠️ Current Limitations
 
-This is the **foundation build only**. The following features are **not** implemented yet:
-
-- ❌ Continuous listening / silence detection
 - ❌ Personality system
-- ❌ Memory / conversation history
-- ❌ Reactions & emotions
-- ❌ Interruption handling
-- ❌ Cost control logic
+- ❌ Persistent memory / conversation history
+- ❌ Interruption handling (flag exists, not yet wired)
 - ❌ Threading / async
+- ❌ Background music / ambient awareness
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] Implement decision model logic
+- [x] ~~Foundation skeleton~~
+- [x] ~~Continuous listening with silence detection~~
+- [x] ~~Decision engine (Brain)~~
 - [ ] Add personality system
-- [ ] Conversation memory
-- [ ] Continuous listening with VAD (Voice Activity Detection)
-- [ ] Interruption handling
+- [ ] Persistent memory storage
+- [ ] Wire interruption handling
 - [ ] Reaction animations
-- [ ] Cost tracking & rate limiting
+- [ ] Cost tracking dashboard
 
 ---
 
