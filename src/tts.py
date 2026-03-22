@@ -40,7 +40,7 @@ TTS_VOICE = "af_bella"
 TTS_FORMAT = "wav"
 
 # Polling Settings
-POLL_INTERVAL = 1.2   # seconds
+POLL_INTERVAL = 1.5   # seconds
 MAX_POLL_TIME = 10.0   # seconds
 
 # Interruption detection
@@ -103,47 +103,40 @@ def request_tts(text: str) -> str | dict | None:
 
 def poll_tts(job_uuid: str) -> str | None:
     """
-    Step 2: Poll for job completion using multiple endpoint patterns.
+    Step 2: Poll for job completion using POST requests as required by the API.
     """
     start_time = time.time()
-    headers = {"Authorization": f"Bearer {TTS_AI_API_KEY}"}
-    
-    # Try these patterns until one stops giving 404s
-    patterns = [
-        f"{TTS_API_URL}?uuid={job_uuid}",
-        f"{TTS_API_URL}status/{job_uuid}",
-        f"{TTS_API_URL}?job_id={job_uuid}",
-        f"{TTS_API_URL}{job_uuid}"
-    ]
+    headers = {
+        "Authorization": f"Bearer {TTS_AI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {"uuid": job_uuid}
 
-    log.info(f"[TTS] Polling status for job: {job_uuid} …")
+    log.info(f"[TTS] Polling status for job: {job_uuid} (using POST) …")
 
     while time.time() - start_time < MAX_POLL_TIME:
-        for url in patterns:
-            try:
-                resp = requests.get(url, headers=headers, timeout=5)
-                if resp.status_code == 404:
-                    continue  # Try next pattern
-                
-                resp.raise_for_status()
-                data = resp.json()
-                log.info(f"[TTS] Poll Result ({url}): {data.get('status')}")
+        try:
+            # Poll using POST to the same endpoint with the UUID
+            resp = requests.post(TTS_API_URL, headers=headers, json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            status = data.get("status", "unknown")
+            log.info(f"[TTS] Poll Status: {status}")
 
-                if data.get("status") == "completed" or data.get("result_url") or data.get("url"):
-                    final_url = data.get("result_url") or data.get("url")
-                    if final_url:
-                        log.info(f"[TTS] Finished! URL: {final_url}")
-                        return final_url
-                
-                # If we got a valid response but it's still queued, break inner loop to sleep
-                break
+            if status == "completed" or data.get("result_url") or data.get("url"):
+                url = data.get("result_url") or data.get("url")
+                if url:
+                    log.info(f"[TTS] Finished! URL: {url}")
+                    return url
+            
+            time.sleep(POLL_INTERVAL)
+            
+        except Exception as e:
+            log.warning(f"[TTS] Polling attempt failed: {e}")
+            time.sleep(POLL_INTERVAL)
 
-            except Exception as e:
-                log.warning(f"[TTS] Poll attempt failed ({url}): {e}")
-        
-        time.sleep(POLL_INTERVAL)
-
-    log.error("[TTS] Polling timed out or all patterns failed 404.")
+    log.error("[TTS] Polling timed out — skipping audio.")
     return None
 
 
@@ -183,7 +176,6 @@ def _synthesize(text: str) -> tuple[np.ndarray, int] | None:
         result_url = poll_tts(result)
 
     if not result_url:
-        log.warning("[TTS] Could not obtain result_url (timeout or 404)")
         return None
 
     audio_bytes = download_audio(result_url)
@@ -203,7 +195,7 @@ def _synthesize(text: str) -> tuple[np.ndarray, int] | None:
 
 
 # ---------------------------------------------------------------------------
-# Notification & Main Interface
+# Playback API
 # ---------------------------------------------------------------------------
 
 def speak(text: str) -> None:
