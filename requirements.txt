@@ -1,0 +1,19 @@
+# Desktop Buddy - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Audio recording
+sounddevice>=0.4.6
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Speech-to-Text (Groq Whisper API)
+groq>=0.4.0
+
+# Response Engine (OpenRouter API)
+requests>=2.31.0
+
+# Text-to-Speech (Google Cloud)
+google-cloud-texttospeech>=2.14.0
