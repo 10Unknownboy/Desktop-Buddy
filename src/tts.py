@@ -45,6 +45,7 @@ def speak(text: str) -> bool:
                 os.remove(temp_file)
             except OSError:
                 pass
+    return True
 
 def stop_speaking() -> None:
     """Stops playback instantly."""
