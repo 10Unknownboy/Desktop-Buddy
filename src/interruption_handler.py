@@ -13,7 +13,7 @@ detects it and returns ``False``.  This module then:
 
 from src.audio_input import listen_continuous
 from src.stt import transcribe
-from src.tts import resume_speaking, get_speaking_state
+from src.tts import speak, stop_speaking
 
 import os
 
@@ -77,31 +77,26 @@ def handle_interruption(
     )
 
     action = instruction.get("interrupt_action", "switch")
-    speaking = get_speaking_state()
 
     print(f"⚡  Interrupt action: {action}")
 
     # -- STOP: discard previous, do nothing ------------------------------
     if action == "stop":
         print("🛑  Previous response discarded.")
+        stop_speaking()
         return None
 
     # -- CONTINUE: resume previous response ------------------------------
-    if action == "continue" and speaking.get("has_remaining", False):
-        print("▶️  Resuming previous response …")
-        completed = resume_speaking()
-        if not completed:
-            # Interrupted again during resume — recurse
-            return handle_interruption(state, personality_prompt, mood_summary)
+    if action == "continue":
+        print("▶️  Resuming previous response not supported by basic TTS.")
         return None
 
     # -- SWITCH: return instruction for caller to process ----------------
     print("🔄  Switching to new context.")
+    stop_speaking()
     return instruction
 
 
 def _try_resume() -> None:
     """Attempt to resume previous speech if there's remaining audio."""
-    state = get_speaking_state()
-    if state.get("has_remaining", False):
-        resume_speaking()
+    pass

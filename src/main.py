@@ -20,7 +20,7 @@ from src.audio_input import listen_continuous
 from src.stt import transcribe
 from src.decision_engine import decide, update_context
 from src.response_engine import generate_response
-from src.tts import speak, speak_interruptible
+from src.tts import speak, stop_speaking
 from src.reaction_system import play_silence_reaction, play_directed_reaction
 from src.personality import load_personality, get_personality_prompt, should_react
 from src.interruption_handler import handle_interruption
@@ -227,7 +227,7 @@ def _handle_instruction(instruction: dict, personality: dict) -> None:
         response = "Something went wrong… try again?"
 
     if response:
-        completed = speak_interruptible(response)
+        completed = speak(response)
         update_context("assistant", response)
         add_context_message("assistant", response)
 
