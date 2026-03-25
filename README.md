@@ -258,6 +258,42 @@ Logs: `logs/buddy.log` (DEBUG-level file, INFO-level console)
 
 ## 🛠️ Current Limitations
 
+- Requires valid API keys for Groq, OpenRouter, and TTS.ai
+- Best stability on Windows 10/11; Linux/macOS support is community-tested only
+- Heavy CPU load under continuous speech + large context windows
+- Memory JSON may grow indefinitely; manual cleanup recommended
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create branch `feature/your-feature` or `fix/your-bug`
+3. Run tests before commit (if tests are present): `pytest`
+4. Open a pull request with a clear description and screenshots/logs for UI/UX changes
+
+### Coding style
+
+- Keep 79-char line width where possible
+- Follow existing naming and modular patterns in `src/`
+- Add comments for non-obvious logic in `decision_engine.py`, `reaction_system.py`, `memory_manager.py`
+
+---
+
+## 🐛 Troubleshooting
+
+- If speech is not captured: verify microphone permissions and that `pyaudio` or alternative backend is installed
+- If TTS fails: confirm `TTS_AI_API_KEY` and that voice model is available on `tts.ai`
+- If OpenRouter errors: check request quota and usage limits at `https://openrouter.ai/dashboard`
+- If memory updates fail: inspect `data/memory.json` for corruption and restore from backup
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License. See `LICENSE`.
+
+
 - ❌ Persistent conversation memory across sessions
 
 ---
